@@ -3,7 +3,6 @@
 import logging
 import re
 from typing import Annotated, Any, Dict, List
-
 import boto3
 from botocore.exceptions import ClientError
 from bson import ObjectId
@@ -38,6 +37,7 @@ from whyhow_api.schemas.documents import (
 from whyhow_api.schemas.workspaces import WorkspaceDocumentModel
 from whyhow_api.services.crud.base import get_all, get_all_count
 from whyhow_api.services.crud.document import (
+    create_document,
     assign_documents_to_workspace,
     delete_document,
     process_document,
@@ -374,12 +374,20 @@ async def generate_presigned_post_endpoint(
     user_id: ObjectId = Depends(get_user),
     settings: Settings = Depends(get_settings),
     llm_client: LLMClient = Depends(get_llm_client),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> GeneratePresignedResponse:
     """Generate a presigned POST for uploading a document."""
     filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", request.filename)
     key = f"{str(user_id)}/{filename}"
 
-    s3_client = boto3.client("s3")
+    # UPDATED: Add endpoint_url support for MinIO
+    endpoint_url = settings.aws.endpoint_url
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=settings.aws.access_key_id,
+        aws_secret_access_key=settings.aws.secret_access_key.get_secret_value() if settings.aws.secret_access_key else None
+        )
 
     # check if S3 object already exists
     try:
@@ -395,24 +403,41 @@ async def generate_presigned_post_endpoint(
         )
 
     # generate a random mongo object id to use as the document id
-    object_id_str = str(ObjectId())
+    object_id = ObjectId()
+    object_id_str = str(object_id)
 
     # Set origin workspace id
-    workspace_id = str(request.workspace_id)
+    workspace_id = ObjectId(request.workspace_id) if request.workspace_id else None
+
+    # Create document record in MongoDB using CRUD function
+    try:
+        await create_document(
+            collection=db,
+            user_id=user_id,
+            document_id=object_id,
+            filename=filename,
+            workspace_id=workspace_id
+        )
+    except Exception as e:
+        logger.error(f"Failed to create document record: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create document record."
+        )
 
     response = s3_client.generate_presigned_post(
         Bucket=settings.aws.s3.bucket,
         Key=key,
         Fields={
             "x-amz-meta-document-id": object_id_str,
-            "x-amz-meta-origin-workspace-id": workspace_id,
+            "x-amz-meta-origin-workspace-id": str(workspace_id) if workspace_id else "",
         },
         Conditions=[
             {
                 "x-amz-meta-document-id": object_id_str,
             },
             {
-                "x-amz-meta-origin-workspace-id": workspace_id,
+                "x-amz-meta-origin-workspace-id": str(workspace_id) if workspace_id else "",
             },
             [
                 "content-length-range",
@@ -439,7 +464,14 @@ async def generate_presigned_download_endpoint(
     """Generate a presigned url for downloading a document."""
     key = f"{str(user_id)}/{document.metadata.filename}"
 
-    s3_client = boto3.client("s3")
+    # UPDATED: Add endpoint_url support for MinIO
+    endpoint_url = settings.aws.endpoint_url
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=settings.aws.access_key_id,
+        aws_secret_access_key=settings.aws.secret_access_key.get_secret_value() if settings.aws.secret_access_key else None
+        )
 
     # make sure the S3 object exists
     try:

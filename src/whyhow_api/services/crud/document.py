@@ -32,6 +32,39 @@ from whyhow_api.services.crud.chunks import (
 
 logger = logging.getLogger(__name__)
 
+# Only for local testing , 
+# The original architecture was designed for production AWS environments with S3 event notifications, not local development with MinIO.
+async def create_document(
+    collection: AsyncIOMotorDatabase,
+    user_id: ObjectId,
+    document_id: ObjectId,
+    filename: str,
+    workspace_id: ObjectId | None = None,
+) -> DocumentDocumentModel:
+    """Create a new document record."""
+    from datetime import datetime
+    
+    document_record = {
+        "_id": document_id,
+        "workspaces": [workspace_id] if workspace_id else [],
+        "status": "uploaded",
+        "errors": [],
+        "metadata": {
+            "filename": filename,
+            "size": 0,
+            "format": filename.split('.')[-1] if '.' in filename else "unknown"
+        },
+        "tags": {},
+        "user_metadata": {},
+        "created_at": datetime.utcnow(),
+        "created_by": user_id
+    }
+    
+    await collection["document"].insert_one(document_record)
+    logger.info(f"Created document record with ID: {document_id}")
+    
+    return DocumentDocumentModel(**document_record)
+
 
 async def get_documents(
     collection: AsyncIOMotorCollection,

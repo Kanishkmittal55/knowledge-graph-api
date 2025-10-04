@@ -223,6 +223,11 @@ class SettingsS3(BaseModel):
 
 class SettingsAWS(BaseModel):
     """AWS settings."""
+    # To switch between local and actual aws
+    access_key_id: str | None = None
+    secret_access_key: SecretStr | None = None  
+    endpoint_url: str | None = None
+    default_region: str = "us-east-1"
 
     s3: SettingsS3 = SettingsS3()
 
